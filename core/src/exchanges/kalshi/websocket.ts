@@ -1,6 +1,11 @@
 import WebSocket from "ws";
 import { OrderBook, Trade, OrderLevel } from "../../types";
 import { KalshiAuth } from "./auth";
+import {
+  parseKalshiOrderBookDelta,
+  parseKalshiOrderBookSnapshot,
+} from "./orderbook";
+import { invertKalshiUnified } from "./price";
 
 interface QueuedPromise<T> {
   resolve: (value: T | PromiseLike<T>) => void;
@@ -222,42 +227,11 @@ export class KalshiWebSocket {
 
   private handleOrderbookSnapshot(data: any) {
     const ticker = data.market_ticker;
+    const orderBook = parseKalshiOrderBookSnapshot(data);
 
-    // Kalshi orderbook structure:
-    // yes: [{ price: number (cents), quantity: number }, ...]
-    // no: [{ price: number (cents), quantity: number }, ...]
-
-    const bids: OrderLevel[] = (data.yes || [])
-      .map((level: any) => {
-        const price = (level.price || level[0]) / 100;
-        const size =
-          (level.quantity !== undefined
-            ? level.quantity
-            : level.size !== undefined
-              ? level.size
-              : level[1]) || 0;
-        return { price, size };
-      })
-      .sort((a: OrderLevel, b: OrderLevel) => b.price - a.price);
-
-    const asks: OrderLevel[] = (data.no || [])
-      .map((level: any) => {
-        const price = (100 - (level.price || level[0])) / 100;
-        const size =
-          (level.quantity !== undefined
-            ? level.quantity
-            : level.size !== undefined
-              ? level.size
-              : level[1]) || 0;
-        return { price, size };
-      })
-      .sort((a: OrderLevel, b: OrderLevel) => a.price - b.price);
-
-    const orderBook: OrderBook = {
-      bids,
-      asks,
-      timestamp: Date.now(),
-    };
+    if (!orderBook) {
+      return;
+    }
 
     this.orderBooks.set(ticker, orderBook);
     this.resolveOrderBook(ticker, orderBook);
@@ -272,22 +246,21 @@ export class KalshiWebSocket {
       return;
     }
 
-    // Apply delta updates
-    // Kalshi sends: { price: number, delta: number, side: 'yes' | 'no' }
-    const price = data.price / 100;
-    const delta =
-      data.delta !== undefined
-        ? data.delta
-        : data.quantity !== undefined
-          ? data.quantity
-          : 0;
-    const side = data.side;
+    const update = parseKalshiOrderBookDelta(data);
 
-    if (side === "yes") {
-      this.applyDelta(existing.bids, price, delta, "desc");
+    if (!update) {
+      return;
+    }
+
+    if (update.side === "yes") {
+      this.applyDelta(existing.bids, update.price, update.delta, "desc");
     } else {
-      const yesPrice = (100 - data.price) / 100;
-      this.applyDelta(existing.asks, yesPrice, delta, "asc");
+      this.applyDelta(
+        existing.asks,
+        invertKalshiUnified(update.price),
+        update.delta,
+        "asc",
+      );
     }
 
     existing.timestamp = Date.now();

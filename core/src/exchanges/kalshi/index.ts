@@ -33,7 +33,8 @@ import { AuthenticationError } from "../../errors";
 import { parseOpenApiSpec } from "../../utils/openapi";
 import { kalshiApiSpec } from "./api";
 import { getKalshiConfig, KalshiApiConfig, KALSHI_PATHS } from "./config";
-import { fromKalshiCents, invertKalshiCents } from "./price";
+import { parseKalshiRestOrderBook } from "./orderbook";
+import { fromKalshiCents } from "./price";
 
 // Re-export for external use
 export type { KalshiWebSocketConfig };
@@ -174,36 +175,8 @@ export class KalshiExchange extends PredictionMarketExchange {
 
     const isNoOutcome = id.endsWith("-NO");
     const ticker = id.replace(/-NO$/, "");
-    const data = (await this.callApi("GetMarketOrderbook", { ticker }))
-      .orderbook;
-
-    let bids: any[];
-    let asks: any[];
-
-    if (isNoOutcome) {
-      bids = (data.no || []).map((level: number[]) => ({
-        price: fromKalshiCents(level[0]),
-        size: level[1],
-      }));
-      asks = (data.yes || []).map((level: number[]) => ({
-        price: invertKalshiCents(level[0]),
-        size: level[1],
-      }));
-    } else {
-      bids = (data.yes || []).map((level: number[]) => ({
-        price: fromKalshiCents(level[0]),
-        size: level[1],
-      }));
-      asks = (data.no || []).map((level: number[]) => ({
-        price: invertKalshiCents(level[0]),
-        size: level[1],
-      }));
-    }
-
-    bids.sort((a: any, b: any) => b.price - a.price);
-    asks.sort((a: any, b: any) => a.price - b.price);
-
-    return { bids, asks, timestamp: Date.now() };
+    const response = await this.callApi("GetMarketOrderbook", { ticker });
+    return parseKalshiRestOrderBook(response, isNoOutcome);
   }
 
   async fetchTrades(
